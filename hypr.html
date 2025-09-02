@@ -1,0 +1,479 @@
+<!-- 
+
+  Tab/shTab väljer fönster
+  Delete tar bort fönster
+  T byter hor/ver
+  R = Reset
+  A-Z skapar nytt fönster
+
+  Saknas:  piltangenter, flytt, mouseMove
+
+  v/h borde styras av width och height istf varannan gång
+
+  Node:
+    type   'leaf' eller 'split'
+    title  en bokstav, t ex A, B osv
+    id     sju bokstäver och siffror (title kan vara dublett)
+    first  pekare till Node (left/upper child)
+    second pekare till Node (right/lower child)
+
+  focusedId = curr. Sju tecken, t ex abcd123
+
+  Rekursiva funktioner:
+    leavesInOrder
+    findLeaf
+    findParent
+    firstLeaf
+    layout
+
+-->
+
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hyprland-simulator (dynamisk "dwindle")</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #0f1115;
+    color: #e5e7eb;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  }
+  #screen {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: #0b0d11;
+  }
+
+  /* "Fönster" */
+  .win {
+    position: absolute;
+    border: 2px solid #2d3748;
+    background: #11151d;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    user-select: none;
+    transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+    box-shadow: 0 6px 18px rgba(0,0,0,.35);
+    letter-spacing: 1px;
+  }
+  .win .label {
+    font-size: clamp(18px, 6.2vw, 68px);
+    font-weight: 700;
+    opacity: 0.9;
+    text-shadow: 0 1px 0 rgba(0,0,0,.4);
+  }
+  .focused {
+    border-color: #6aa9ff;
+    box-shadow: 0 0 0 2px rgba(106,169,255,.25), 0 8px 24px rgba(0,0,0,.5);
+  }
+
+  /* Delningslinjer (mest kosmetiskt) */
+  .split-line {
+    position: absolute;
+    background: #1f2937;
+    opacity: .6;
+    pointer-events: none;
+  }
+
+  /* Hjälp/overlay */
+  #hud {
+    position: fixed;
+    left: 12px;
+    top: 12px;
+    background: rgba(17,21,29,.85);
+    border: 1px solid #374151;
+    padding: 10px 12px;
+    border-radius: 8px;
+    backdrop-filter: blur(6px);
+    max-width: min(90vw, 560px);
+  }
+  #hud h1 {
+    margin: 0 0 6px 0;
+    font-size: 16px;
+    font-weight: 700;
+  }
+  #hud p {
+    margin: 4px 0;
+    font-size: 14px;
+    color: #cbd5e1;
+  }
+  #hud kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    padding: 1px 6px;
+    font-size: 12px;
+    color: #e2e8f0;
+  }
+  #footer {
+    position: fixed;
+    right: 12px;
+    bottom: 12px;
+    font-size: 13px;
+    color: #9ca3af;
+    opacity: .9;
+  }
+  #status {
+    display: inline-block;
+    padding: 6px 10px;
+    border: 1px solid #374151;
+    border-radius: 999px;
+    background: rgba(17,21,29,.85);
+  }
+  #status .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #6aa9ff;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  /* Tomt tips */
+  #empty-tip {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: #9ca3af;
+    pointer-events: none;
+    text-align: center;
+    padding: 24px;
+  }
+  #empty-tip span {
+    opacity: .85;
+    font-size: clamp(16px, 2.8vw, 24px);
+  }
+</style>
+</head>
+<body>
+  <div id="screen" aria-label="Hyprland layout-simulator"></div>
+
+  <div id="hud">
+    <h1>Hyprland-simulator – dwindle (spiral) 🌀</h1>
+    <p>Tryck på en bokstav (<kbd>A–Ö</kbd>) för att öppna ett nytt fönster med den bokstaven.</p>
+    <p><kbd>Mellanslag</kbd> nästa fokus · <kbd>Backspace</kbd>/<kbd>Delete</kbd> stäng fokus · <kbd>T</kbd> växla nästa delning (<em>horisontell/vertikal</em>) · <kbd>R</kbd> återställ</p>
+    <p>Layouten delar det fokuserade fönstret och alternerar riktning (Hyprlands <em>dwindle</em>-känsla).</p>
+  </div>
+
+  <div id="footer">
+    <span id="status"><span class="dot"></span>Nästa delning: <strong id="dirLabel">Vertikal</strong></span>
+  </div>
+
+  <div id="empty-tip"><span>Inga fönster än. Tryck t.ex. <strong>A</strong>, <strong>B</strong>, <strong>C</strong> …</span></div>
+
+<script>
+(() => {
+  /*** Modell ***/
+  let root = null;                   // layout-trädet (leaf/split)
+  let focusedId = null;              // id för fokuserad leaf
+  let nextDir = 'v';                 // 'v' = vertikal delning (vänster/höger), 'h' = horisontell (över/under)
+  const GAP_INNER = 10;              // "inner gaps"
+  const GAP_OUTER = 12;              // "outer gaps"
+  const MIN_SIZE = 42;               // minsta storlek för ett fönster
+
+  const screen = document.getElementById('screen');
+  const dirLabel = document.getElementById('dirLabel');
+  const emptyTip = document.getElementById('empty-tip');
+
+  const winEls = new Map();          // id -> DOM-element
+  let lineEls = [];                  // delningslinjer
+
+  function uid() { return Math.random().toString(36).slice(2, 9); }
+
+  function makeLeaf(title) { return { type: 'leaf', id: uid(), title }; }
+  function makeSplit(dir, first, second) { return { type: 'split', dir, first, second }; }
+
+  /*** Hjälpfunktioner för att hitta/ersätta ***/
+  function findParent(node, leafId, parent=null, side=null) {
+    if (!node) return null;
+    if (node.type === 'leaf') return null;
+    if (node.first.type === 'leaf' && node.first.id === leafId) return { parent: node, side: 'first' };
+    if (node.second.type === 'leaf' && node.second.id === leafId) return { parent: node, side: 'second' };
+    return findParent(node.first, leafId, node, 'first') || findParent(node.second, leafId, node, 'second');
+  }
+
+  function findLeaf(node, leafId) {
+    if (!node) return null;
+    if (node.type === 'leaf') return node.id === leafId ? node : null;
+    return findLeaf(node.first, leafId) || findLeaf(node.second, leafId);
+  }
+
+  function firstLeaf(node) {
+    if (!node) return null;
+    return node.type === 'leaf' ? node : firstLeaf(node.first);
+  }
+
+  function leavesInOrder(node, out=[]) {
+    if (!node) return out;
+    if (node.type === 'leaf') out.push(node);
+    else { leavesInOrder(node.first, out); leavesInOrder(node.second, out); }
+    return out;
+  }
+
+  /*** Operationer ***/
+  function addWindow(labelChar) {
+    const leaf = makeLeaf(labelChar.toUpperCase());
+    if (!root) {
+      root = leaf;
+      focusedId = leaf.id;
+      render();
+      return;
+    }
+    // Splitta det fokuserade bladet
+    const target = findLeaf(root, focusedId) || firstLeaf(root);
+    if (!target) { // säkerhetsnät
+      root = leaf;
+      focusedId = leaf.id;
+      render();
+      return;
+    }
+    // Ersätt target med split
+    function replace(node) {
+      if (node.type === 'leaf') {
+        if (node.id === target.id) {
+          // target blir first, nytt blad blir second (som Hyprland ofta gör)
+          const split = makeSplit(nextDir, node, leaf);
+          // växla nästa delningsriktning för "dwindle"
+          nextDir = (nextDir === 'v') ? 'h' : 'v';
+          focusedId = leaf.id;
+          updateDirLabel();
+          return split;
+        } else {
+          return node;
+        }
+      } else {
+        return makeSplit(node.dir, replace(node.first), replace(node.second));
+      }
+    }
+    root = replace(root);
+    render();
+  }
+
+  function closeFocused() {
+    if (!root || !focusedId) return;
+    if (root.type === 'leaf') {
+      root = null;
+      focusedId = null;
+      render();
+      return;
+    }
+    const info = findParent(root, focusedId);
+    if (!info) {
+      // Om fokuset inte hittas (borde inte hända), töm allt
+      root = null;
+      focusedId = null;
+      render();
+      return;
+    }
+    const { parent } = info;
+    const isFirst = (info.side === 'first');
+    const sibling = isFirst ? parent.second : parent.first;
+
+    // Ersätt parent i trädet med sibling (kollapsa delningen)
+    function collapse(node) {
+      if (node === parent) return sibling;
+      if (node.type === 'leaf') return node;
+      return makeSplit(node.dir, collapse(node.first), collapse(node.second));
+    }
+    root = collapse(root);
+    const nextFocus = firstLeaf(root);
+    focusedId = nextFocus ? nextFocus.id : null;
+    render();
+  }
+
+  function focusNext(dir=+1) {
+    const arr = leavesInOrder(root);
+    if (!arr.length || !focusedId) return;
+    const i = Math.max(0, arr.findIndex(l => l.id === focusedId));
+    const n = (i + dir + arr.length) % arr.length;
+    focusedId = arr[n].id;
+    render();
+  }
+
+  function resetAll() {
+    root = null;
+    focusedId = null;
+    nextDir = 'v';
+    updateDirLabel();
+    render();
+  }
+
+  function updateDirLabel() {
+    dirLabel.textContent = nextDir === 'v' ? 'Vertikal' : 'Horisontell';
+  }
+
+  /*** Layout ***/
+  function render() {
+    // Tom/hjälptext
+    emptyTip.style.display = root ? 'none' : 'grid';
+
+    // Rensa gamla split-linjer
+    for (const el of lineEls) el.remove();
+    lineEls = [];
+
+    // Layoutparametrar
+    const W = screen.clientWidth;
+    const H = screen.clientHeight;
+
+    const viewport = {
+      x: GAP_OUTER,
+      y: GAP_OUTER,
+      w: Math.max(0, W - GAP_OUTER*2),
+      h: Math.max(0, H - GAP_OUTER*2)
+    };
+
+    // Återanvänd/skapa fönster-element
+    const seen = new Set();
+
+    function applyRect(el, r) {
+      el.style.left = r.x + 'px';
+      el.style.top = r.y + 'px';
+      el.style.width = Math.max(1, r.w) + 'px';
+      el.style.height = Math.max(1, r.h) + 'px';
+    }
+
+    function addSplitLine(x, y, w, h, dir) {
+      const line = document.createElement('div');
+      line.className = 'split-line';
+      if (dir === 'v') { // vertikal delning => lodrät linje
+        const lx = Math.round(x + w/2 - 1);
+        line.style.left = lx + 'px';
+        line.style.top = (y + GAP_INNER/2) + 'px';
+        line.style.width = '2px';
+        line.style.height = Math.max(0, h - GAP_INNER) + 'px';
+      } else { // horisontell => vågrät
+        const ly = Math.round(y + h/2 - 1);
+        line.style.left = (x + GAP_INNER/2) + 'px';
+        line.style.top = ly + 'px';
+        line.style.width = Math.max(0, w - GAP_INNER) + 'px';
+        line.style.height = '2px';
+      }
+      screen.appendChild(line);
+      lineEls.push(line);
+    }
+
+    function layout(node, rect) {
+      if (!node) return;
+      if (node.type === 'leaf') {
+        console.log(node.id)
+        let el = winEls.get(node.id);
+        if (!el) {
+          el = document.createElement('div');
+          el.className = 'win';
+          el.dataset.id = node.id;
+          const lab = document.createElement('div');
+          lab.className = 'label';
+          lab.textContent = node.title;
+          el.appendChild(lab);
+          screen.appendChild(el);
+          winEls.set(node.id, el);
+        }
+        el.classList.toggle('focused', node.id === focusedId);
+        // Tillämpa minimistorlek
+        const r = {
+          x: rect.x,
+          y: rect.y,
+          w: Math.max(MIN_SIZE, rect.w),
+          h: Math.max(MIN_SIZE, rect.h)
+        };
+        applyRect(el, r);
+        seen.add(node.id);
+      } else {
+        // Dela rektangel i två med inner-gap
+        if (node.dir === 'v') {
+          const w2 = Math.floor((rect.w - GAP_INNER) / 2);
+          const left = { x: rect.x, y: rect.y, w: w2, h: rect.h };
+          const right = { x: rect.x + w2 + GAP_INNER, y: rect.y, w: rect.w - w2 - GAP_INNER, h: rect.h };
+          addSplitLine(rect.x, rect.y, rect.w, rect.h, 'v');
+          layout(node.first, left);
+          layout(node.second, right);
+        } else {
+          const h2 = Math.floor((rect.h - GAP_INNER) / 2);
+          const top = { x: rect.x, y: rect.y, w: rect.w, h: h2 };
+          const bottom = { x: rect.x, y: rect.y + h2 + GAP_INNER, w: rect.w, h: rect.h - h2 - GAP_INNER };
+          addSplitLine(rect.x, rect.y, rect.w, rect.h, 'h');
+          layout(node.first, top);
+          layout(node.second, bottom);
+        }
+      }
+    }
+
+    // Kör layout
+    layout(root, viewport);
+
+    // Ta bort fönster som inte längre finns i modellen
+    for (const [id, el] of winEls.entries()) {
+      if (!seen.has(id)) {
+        el.remove();
+        winEls.delete(id);
+      }
+    }
+  }
+
+  /*** Tangentbordsstyrning ***/
+  document.addEventListener('keydown', (ev) => {
+    // Ignorera om man skriver i ett input/textarea (även om vi inte har några)
+    const tag = (ev.target && ev.target.tagName) ? ev.target.tagName.toLowerCase() : '';
+    const inForm = tag === 'input' || tag === 'textarea' || tag === 'select' || ev.isComposing;
+    if (inForm) return;
+
+    const key = ev.key;
+
+    // Bokstäver, både gemener/versaler
+    if (/^[a-qsu-zA-QSU-Z]$/.test(key)) {
+		  addWindow(key.toUpperCase());
+      ev.preventDefault();
+      return;
+    }
+
+    switch (key) {
+      case ' ':
+        focusNext(+1);
+        ev.preventDefault();
+        break;
+      case 'Tab':
+        focusNext(ev.shiftKey ? -1 : +1);
+        ev.preventDefault();
+        break;
+      case 'Backspace':
+      case 'Delete':
+        closeFocused();
+        ev.preventDefault();
+        break;
+      case 't':
+      case 'T':
+        // Växla nästa delning (visuellt, påverkar kommande split)
+        nextDir = (nextDir === 'v') ? 'h' : 'v';
+        updateDirLabel();
+        // Liten blink på status
+        const st = document.getElementById('status');
+        st.style.transform = 'scale(1.03)';
+        setTimeout(() => st.style.transform = 'scale(1)', 120);
+        break;
+      case 'r':
+      case 'R':
+        resetAll();
+        break;
+      default:
+        break;
+    }
+  }, { passive: false });
+
+  // Start
+  updateDirLabel();
+  render();
+})();
+</script>
+</body>
+</html>

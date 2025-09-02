@@ -4,7 +4,7 @@ range = _.range
 tiles = []
 current = -1
 antal = 1
-
+ 
 created = 0
 
 class Tile 
