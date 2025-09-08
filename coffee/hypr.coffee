@@ -16,7 +16,7 @@ DN = 2
 UP = 3
 
 curr = 0
-created = 0
+created = 0 
 
 drawNode = (i,x,y,w,h) ->
 	if i not of tree then return
