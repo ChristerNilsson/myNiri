@@ -91,12 +91,17 @@ xdraw = ->
 	background 'gray'
 	drawNode 0, 0, 0, width, height
 
-makeExtra = ->
-	extras = {}
-	calcNode 0, 0, 0, width, height
-	for i in range 4
-		setDirections i
-	echo 'makeExtra', extras
+tagBort = (i, level = 0) ->
+	echo 'tagBort', i, level
+	if i < 0 then return 
+	delta = 2 ** level
+	if i-delta >= 0
+		tree[i - delta] = tree[i]
+	if tree[i] == ' '
+		tagBort 2*i + 1, level + 1
+		tagBort 2*i + 2, level + 1
+	else
+		delete tree[i]
 
 keyPressed = ->
 	if key == 'n'
@@ -112,28 +117,13 @@ keyPressed = ->
 			tree[curr] = SPC
 			tree[right] = newNode
 			curr = right
-		# makeExtra()
 		echo 'Insert',curr,tree
 
 	if key == 'Delete'
-		if curr == -1 then return
-		if 1 == _.size tree
-			tree = {}
-			curr = -1
-		else
-			parent = (curr-1) // 2
-			left = 2 * parent + 1
-			right = 2 * parent + 2
-			other = if right == curr then left else right
-			tree[parent] = tree[other]
-			delete tree[right]
-			delete tree[left]
-			curr = parent
-		echo 'Delete',curr,tree
-
-	# if _.includes 'ABCDEFGHabcdefgh', key
-	# 	for k in _.keys tree 
-	# 		if tree[k] == key.toUpperCase() then curr = int(k)
+		tagBort 0
+		if 1 == _.size tree then curr = 0
+		if 0 == _.size tree then curr = -1
+		echo tree,curr
 
 	if key == 'ArrowRight' then findTarget RT
 	if key == 'ArrowLeft'  then findTarget LT
